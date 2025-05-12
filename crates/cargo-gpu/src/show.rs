@@ -19,7 +19,7 @@ pub enum Info {
     SpirvSource(SpirvSourceDep),
     /// The git commitsh of this cli tool.
     Commitsh,
-    /// All the available SPIR-V capabilities that can be set with `--capability`
+    /// All the available SPIR-V capabilities that can be set with `--capabilities`
     Capabilities,
 }
 
@@ -47,16 +47,14 @@ impl Show {
             }
             Info::SpirvSource(SpirvSourceDep { shader_crate }) => {
                 let rust_gpu_source =
-                    crate::spirv_source::SpirvSource::get_spirv_std_dep_definition(&shader_crate)?;
-                {
-                    println!("{rust_gpu_source}\n");
-                }
+                    crate::spirv_source::SpirvSource::get_rust_gpu_deps_from_shader(&shader_crate)?;
+                println!("{rust_gpu_source}\n");
             }
             Info::Commitsh => {
                 println!("{}", std::env!("GIT_HASH"));
             }
             Info::Capabilities => {
-                println!("All available options to the `cargo gpu build --capability` argument:");
+                println!("All available options to the `cargo gpu build --capabilities` argument:");
                 #[expect(
                     clippy::use_debug,
                     reason = "It's easier to just use `Debug` formatting than implementing `Display`"
@@ -71,11 +69,11 @@ impl Show {
     }
 
     /// Iterator over all `Capability` variants.
-    fn capability_variants_iter() -> impl Iterator<Item = spirv_builder_cli::spirv::Capability> {
+    fn capability_variants_iter() -> impl Iterator<Item = spirv_builder::Capability> {
         // Since spirv::Capability is repr(u32) we can iterate over
         // u32s until some maximum
         #[expect(clippy::as_conversions, reason = "We know all variants are repr(u32)")]
-        let last_capability = spirv_builder_cli::spirv::Capability::CacheControlsINTEL as u32;
-        (0..=last_capability).filter_map(spirv_builder_cli::spirv::Capability::from_u32)
+        let last_capability = spirv_builder::Capability::CacheControlsINTEL as u32;
+        (0..=last_capability).filter_map(spirv_builder::Capability::from_u32)
     }
 }
