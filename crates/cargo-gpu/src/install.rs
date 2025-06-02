@@ -7,9 +7,55 @@ use crate::spirv_source::{
 use crate::{cache_dir, spirv_source::SpirvSource};
 use anyhow::Context as _;
 use cargo_metadata::Metadata;
-use log::{info, trace};
 use spirv_builder::SpirvBuilder;
 use std::path::{Path, PathBuf};
+
+/// Represents a functional backend installation, whether it was cached or just installed.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct InstalledBackend {
+    /// path to the `rustc_codegen_spirv` dylib
+    pub rustc_codegen_spirv_location: PathBuf,
+    /// toolchain channel name
+    pub toolchain_channel: String,
+    /// directory with target-specs json files
+    pub target_spec_dir: PathBuf,
+}
+
+impl InstalledBackend {
+    /// Creates a new `SpirvBuilder` configured to use this installed backend.
+    #[expect(
+        clippy::unreachable,
+        reason = "it's unreachable, no need to return a Result"
+    )]
+    #[expect(clippy::impl_trait_in_params, reason = "forwarding spirv-builder API")]
+    #[inline]
+    pub fn to_spirv_builder(
+        &self,
+        path_to_crate: impl AsRef<Path>,
+        target: impl Into<String>,
+    ) -> SpirvBuilder {
+        let mut builder = SpirvBuilder::new(path_to_crate, target);
+        self.configure_spirv_builder(&mut builder)
+            .unwrap_or_else(|_| unreachable!("we set target before calling this function"));
+        builder
+    }
+
+    /// Configures the supplied [`SpirvBuilder`]. `SpirvBuilder.target` must be set and must not change after calling this function.
+    ///
+    /// # Errors
+    /// if `SpirvBuilder.target` is not set
+    #[inline]
+    pub fn configure_spirv_builder(&self, builder: &mut SpirvBuilder) -> anyhow::Result<()> {
+        builder.rustc_codegen_spirv_location = Some(self.rustc_codegen_spirv_location.clone());
+        builder.toolchain_overwrite = Some(self.toolchain_channel.clone());
+        builder.path_to_target_spec = Some(self.target_spec_dir.join(format!(
+            "{}.json",
+            builder.target.as_ref().context("expect target to be set")?
+        )));
+        Ok(())
+    }
+}
 
 /// Args for an install
 #[expect(
@@ -17,6 +63,7 @@ use std::path::{Path, PathBuf};
     reason = "cmdline args have many bools"
 )]
 #[derive(clap::Parser, Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
 pub struct Install {
     /// Directory containing the shader crate to compile.
     #[clap(long, default_value = "./")]
@@ -44,6 +91,8 @@ pub struct Install {
     pub rebuild_codegen: bool,
 
     /// Assume "yes" to "Install Rust toolchain: [y/n]" prompt.
+    ///
+    /// Defaults to `false` in cli, `true` in [`Default`]
     #[clap(long, action)]
     pub auto_install_rust_toolchain: bool,
 
@@ -77,46 +126,22 @@ pub struct Install {
     pub force_overwrite_lockfiles_v4_to_v3: bool,
 }
 
-/// Represents a functional backend installation, whether it was cached or just installed.
-#[derive(Clone, Debug)]
-pub struct InstalledBackend {
-    /// path to the `rustc_codegen_spirv` dylib
-    pub rustc_codegen_spirv_location: PathBuf,
-    /// toolchain channel name
-    pub toolchain_channel: String,
-    /// directory with target-specs json files
-    pub target_spec_dir: PathBuf,
-}
-
-impl InstalledBackend {
-    /// Configures the supplied [`SpirvBuilder`]. `SpirvBuilder.target` must be set and must not change after calling this function.
-    pub fn configure_spirv_builder(&self, builder: &mut SpirvBuilder) -> anyhow::Result<()> {
-        builder.rustc_codegen_spirv_location = Some(self.rustc_codegen_spirv_location.clone());
-        builder.toolchain_overwrite = Some(self.toolchain_channel.clone());
-        builder.path_to_target_spec = Some(self.target_spec_dir.join(format!(
-            "{}.json",
-            builder.target.as_ref().context("expect target to be set")?
-        )));
-        Ok(())
-    }
-}
-
-impl Default for Install {
+impl Install {
+    /// Create a default install for a shader crate of some path
     #[inline]
-    fn default() -> Self {
+    #[must_use]
+    pub const fn from_shader_crate(shader_crate: PathBuf) -> Self {
         Self {
-            shader_crate: PathBuf::from("./"),
+            shader_crate,
             spirv_builder_source: None,
             spirv_builder_version: None,
             rebuild_codegen: false,
-            auto_install_rust_toolchain: false,
+            auto_install_rust_toolchain: true,
             clear_target: true,
             force_overwrite_lockfiles_v4_to_v3: false,
         }
     }
-}
 
-impl Install {
     /// Create the `rustc_codegen_spirv_dummy` crate that depends on `rustc_codegen_spirv`
     fn write_source_files(source: &SpirvSource, checkout: &Path) -> anyhow::Result<()> {
         // skip writing a dummy project if we use a local rust-gpu checkout
@@ -129,15 +154,14 @@ impl Install {
         );
 
         {
-            trace!("writing dummy main.rs");
-            let main = "fn main() {}";
+            log::trace!("writing dummy lib.rs");
             let src = checkout.join("src");
-            std::fs::create_dir_all(&src).context("creating directory for 'src'")?;
-            std::fs::write(src.join("main.rs"), main).context("writing 'main.rs'")?;
+            std::fs::create_dir_all(&src).context("creating 'src' directory")?;
+            std::fs::File::create(src.join("lib.rs")).context("creating 'src/lib.rs'")?;
         };
 
         {
-            trace!("writing dummy Cargo.toml");
+            log::trace!("writing dummy Cargo.toml");
             let version_spec = match &source {
                 SpirvSource::CratesIO(version) => {
                     format!("version = \"{version}\"")
@@ -174,11 +198,6 @@ package = "rustc_codegen_spirv"
 
     /// Copy spec files from one dir to another, assuming no subdirectories
     fn copy_spec_files(src: &Path, dst: &Path) -> anyhow::Result<()> {
-        info!(
-            "Copy target specs from {:?} to {:?}",
-            src.display(),
-            dst.display()
-        );
         std::fs::create_dir_all(dst)?;
         let dir = std::fs::read_dir(src)?;
         for dir_entry in dir {
@@ -193,7 +212,6 @@ package = "rustc_codegen_spirv"
 
     /// Add the target spec files to the crate.
     fn update_spec_files(
-        &self,
         source: &SpirvSource,
         install_dir: &Path,
         dummy_metadata: &Metadata,
@@ -204,6 +222,11 @@ package = "rustc_codegen_spirv"
             if let Ok(target_specs) =
                 dummy_metadata.find_package("rustc_codegen_spirv-target-specs")
             {
+                log::info!(
+                    "target-specs: found crate `rustc_codegen_spirv-target-specs` with manifest at `{}`", 
+                    target_specs.manifest_path
+                );
+
                 let target_specs_src = target_specs
                     .manifest_path
                     .as_std_path()
@@ -215,9 +238,17 @@ package = "rustc_codegen_spirv"
                     .context("Could not find `target-specs` directory within `rustc_codegen_spirv-target-specs` dependency")?;
                 if source.is_path() {
                     // skip copy
+                    log::info!(
+                        "target-specs: source is local path, use target-specs from `{}`",
+                        target_specs_src.display()
+                    );
                     target_specs_dst = target_specs_src;
                 } else {
                     // copy over the target-specs
+                    log::info!(
+                        "target-specs: Copy target specs from `{}`",
+                        target_specs_src.display()
+                    );
                     Self::copy_spec_files(&target_specs_src, &target_specs_dst)
                         .context("copying target-specs json files")?;
                 }
@@ -231,14 +262,22 @@ package = "rustc_codegen_spirv"
                     // and hope parallel runs don't shred each other
                     target_specs_dst = cache_dir()?.join("legacy-target-specs-for-local-checkout");
                 }
-                write_legacy_target_specs(&target_specs_dst, self.rebuild_codegen)?;
+                log::info!(
+                    "target-specs: Writing legacy target specs to `{}`",
+                    target_specs_dst.display()
+                );
+                write_legacy_target_specs(&target_specs_dst)?;
             }
         }
 
         Ok(target_specs_dst)
     }
 
-    /// Install the binary pair and return the `(dylib_path, toolchain_channel)`.
+    /// Install the binary pair and return the [`InstalledBackend`], from which you can create [`SpirvBuilder`] instances.
+    ///
+    /// # Errors
+    /// If the installation somehow fails.
+    #[inline]
     #[expect(clippy::too_many_lines, reason = "it's fine")]
     pub fn run(&self) -> anyhow::Result<InstalledBackend> {
         // Ensure the cache dir exists
@@ -299,9 +338,9 @@ package = "rustc_codegen_spirv"
         log::info!("selected toolchain channel `{toolchain_channel:?}`");
 
         log::debug!("update_spec_files");
-        let target_spec_dir = self
-            .update_spec_files(&source, &install_dir, &dummy_metadata, skip_rebuild)
-            .context("writing target spec files")?;
+        let target_spec_dir =
+            Self::update_spec_files(&source, &install_dir, &dummy_metadata, skip_rebuild)
+                .context("writing target spec files")?;
 
         if !skip_rebuild {
             log::debug!("ensure_toolchain_and_components_exist");
