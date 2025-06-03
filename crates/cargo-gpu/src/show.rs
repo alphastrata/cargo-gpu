@@ -1,7 +1,5 @@
 //! Display various information about `cargo gpu`, eg its cache directory.
 
-use std::process::{Command, Stdio};
-
 use crate::cache_dir;
 
 /// Show the computed source of the spirv-std dependency.
@@ -69,8 +67,9 @@ impl Show {
                 }
             }
             Info::Targets => {
-                let target_info = get_spirv_targets()?.join("\n");
-                println!("{}", target_info);
+                for target in Self::available_spirv_targets_iter() {
+                    println!("{target}");
+                }
             }
         }
 
@@ -85,43 +84,12 @@ impl Show {
         let last_capability = spirv_builder::Capability::CacheControlsINTEL as u32;
         (0..=last_capability).filter_map(spirv_builder::Capability::from_u32)
     }
-}
 
-/// Gets available SPIR-V targets by calling the `spirv-tools`' validator:
-/// ```sh
-/// $ spirv-val --version
-/// SPIRV-Tools v2022.2-dev unknown hash, 2022-02-16T16:37:15
-/// Targets:
-///   SPIR-V 1.0
-///   SPIR-V 1.1
-///   SPIR-V 1.2
-///   ... snip for brevity
-///  SPIR-V 1.6 (under Vulkan 1.3 semantics)
-///  ```
-fn get_spirv_targets() -> anyhow::Result<Vec<String>> {
-    // Defaults that have been tested, 1.2 is the existing default in the shader-crate-template.toml
-    let mut targets = vec![
-        "spirv-unknown-vulkan1.0",
-        "spirv-unknown-vulkan1.1",
-        "spirv-unknown-vulkan1.2",
-    ];
-
-    let output = Command::new("spirv-val")
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
-
-    if let Ok(output) = output {
-        let version_info = String::from_utf8_lossy(&output.stdout);
-        if version_info.contains("SPIR-V 1.3") {
-            targets.push("spirv-unknown-vulkan1.3");
-        }
-        if version_info.contains("SPIR-V 1.4") {
-            targets.push("spirv-unknown-vulkan1.4");
-        }
-        // Exhaustively, manually put in all possible versions? or regex them out?
+    /// All supported spirv targets at the time cargo-gpu was compiled.
+    fn available_spirv_targets_iter() -> impl Iterator<Item = String> {
+        legacy_target_specs::TARGET_SPECS
+            .iter()
+            .filter(|(spec, _src)| spec.contains("vulkan"))
+            .map(|(spec, _src)| spec.replace(".json", ""))
     }
-
-    Ok(targets.into_iter().map(String::from).collect())
 }
