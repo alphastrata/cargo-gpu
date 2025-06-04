@@ -2,8 +2,6 @@
 
 use std::fs;
 
-use anyhow::Context;
-
 use crate::cache_dir;
 
 /// Show the computed source of the spirv-std dependency.
@@ -89,12 +87,12 @@ impl Show {
         (0..=last_capability).filter_map(spirv_builder::Capability::from_u32)
     }
 
-    // List all available spirv targets, note: the targets from compile time of cargo-gpu and those
-    // in the cache-directory will be picked up.
+    /// List all available spirv targets, note: the targets from compile time of cargo-gpu and those
+    /// in the cache-directory will be picked up.
     fn available_spirv_targets_iter() -> anyhow::Result<impl Iterator<Item = String>> {
         let legacy_targets = legacy_target_specs::TARGET_SPECS
             .iter()
-            .map(|(spec, _src)| spec.to_string()); // Convert to String
+            .map(|(spec, _src)| (*spec).to_string());
 
         let cache_dir = cache_dir()?;
         if !cache_dir.exists() {
@@ -103,11 +101,9 @@ impl Show {
                 cache_dir.display()
             );
         }
-
         let entries = fs::read_dir(&cache_dir)?;
-
         let cached_targets: Vec<String> = entries
-            .filter_map(|entry| entry.ok())
+            .flatten()
             .flat_map(|entry| {
                 let path = entry.path();
                 if path.is_dir() {
@@ -115,17 +111,18 @@ impl Show {
                         .ok()
                         .into_iter()
                         .flatten()
-                        .filter_map(|e| e.ok())
-                        .filter_map(|e| {
-                            e.path()
+                        .filter_map(Result::ok)
+                        .filter_map(|entry| {
+                            entry
+                                .path()
                                 .file_stem()
-                                .and_then(|s| s.to_str())
+                                .and_then(std::ffi::OsStr::to_str)
                                 .map(str::to_owned)
                         })
                         .collect::<Vec<_>>()
-                } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
                     path.file_stem()
-                        .and_then(|s| s.to_str())
+                        .and_then(std::ffi::OsStr::to_str)
                         .map(str::to_owned)
                         .into_iter()
                         .collect()
@@ -134,21 +131,18 @@ impl Show {
                 }
             })
             .collect();
-
         if cached_targets.is_empty() {
             log::error!(
                 "Cache directory exists but contains no valid SPIR-V target files (*.json): {}",
                 cache_dir.display()
             );
         }
-
         let mut targets: Vec<String> = legacy_targets
             .chain(cached_targets)
-            .filter(|t| t.contains("vulkan"))
+            .filter(|target| target.contains("vulkan"))
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
-
         targets.sort();
         Ok(targets.into_iter())
     }
