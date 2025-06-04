@@ -2,6 +2,8 @@
 
 use std::fs;
 
+use anyhow::Context;
+
 use crate::cache_dir;
 
 /// Show the computed source of the spirv-std dependency.
@@ -89,8 +91,7 @@ impl Show {
 
     // List all available spirv targets, note: the targets from compile time of cargo-gpu and those
     // in the cache-directory will be picked up.
-    fn available_spirv_targets_iter(
-    ) -> Result<impl Iterator<Item = String>, Box<dyn std::error::Error>> {
+    fn available_spirv_targets_iter() -> anyhow::Result<impl Iterator<Item = String>> {
         let legacy_targets = legacy_target_specs::TARGET_SPECS
             .iter()
             .map(|(spec, _src)| spec.to_string()); // Convert to String
@@ -103,13 +104,7 @@ impl Show {
             );
         }
 
-        let entries = fs::read_dir(&cache_dir).map_err(|e| {
-            format!(
-                "Failed to read cache directory {}: {}",
-                cache_dir.display(),
-                e
-            )
-        })?;
+        let entries = fs::read_dir(&cache_dir)?;
 
         let cached_targets: Vec<String> = entries
             .filter_map(|entry| entry.ok())
