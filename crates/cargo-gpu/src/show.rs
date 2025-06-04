@@ -72,7 +72,7 @@ impl Show {
             }
             Info::Targets(SpirvSourceDep { shader_crate }) => {
                 let (source, targets) = Self::available_spirv_targets_iter(shader_crate)?;
-                println!("All available targets for rust-gpu version '{}':", source);
+                println!("All available targets for rust-gpu version '{source}':");
                 for target in targets {
                     println!("{target}");
                 }
