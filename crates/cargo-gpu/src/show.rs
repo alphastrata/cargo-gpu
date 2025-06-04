@@ -92,7 +92,7 @@ impl Show {
     fn available_spirv_targets_iter() -> anyhow::Result<impl Iterator<Item = String>> {
         let legacy_targets = legacy_target_specs::TARGET_SPECS
             .iter()
-            .map(|(spec, _src)| (*spec).to_string());
+            .map(|(spec, _src)| (*spec).to_owned());
 
         let cache_dir = cache_dir()?;
         if !cache_dir.exists() {
@@ -102,6 +102,11 @@ impl Show {
             );
         }
         let entries = fs::read_dir(&cache_dir)?;
+
+        #[expect(
+            clippy::shadow_unrelated,
+            reason = "coz we use 'entry' in repeated nestings"
+        )]
         let cached_targets: Vec<String> = entries
             .flatten()
             .flat_map(|entry| {
