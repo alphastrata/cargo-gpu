@@ -148,9 +148,9 @@ impl Show {
 
         let mut targets: Vec<String> = legacy_targets
             .chain(cached_targets)
+            .filter(|t| t.contains("vulkan"))
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
-            .filter(|t| t.contains("vulkan"))
             .collect();
 
         targets.sort();
