@@ -1,5 +1,7 @@
 //! Display various information about `cargo gpu`, eg its cache directory.
 
+use std::fs;
+
 use crate::cache_dir;
 
 /// Show the computed source of the spirv-std dependency.
@@ -67,7 +69,7 @@ impl Show {
                 }
             }
             Info::Targets => {
-                for target in Self::available_spirv_targets_iter() {
+                for target in Self::available_spirv_targets_iter()? {
                     println!("{target}");
                 }
             }
@@ -85,11 +87,73 @@ impl Show {
         (0..=last_capability).filter_map(spirv_builder::Capability::from_u32)
     }
 
-    /// All supported spirv targets at the time cargo-gpu was compiled.
-    fn available_spirv_targets_iter() -> impl Iterator<Item = String> {
-        legacy_target_specs::TARGET_SPECS
+    // List all available spirv targets, note: the targets from compile time of cargo-gpu and those
+    // in the cache-directory will be picked up.
+    fn available_spirv_targets_iter(
+    ) -> Result<impl Iterator<Item = String>, Box<dyn std::error::Error>> {
+        let legacy_targets = legacy_target_specs::TARGET_SPECS
             .iter()
-            .filter(|(spec, _src)| spec.contains("vulkan"))
-            .map(|(spec, _src)| spec.replace(".json", ""))
+            .map(|(spec, _src)| spec.to_string()); // Convert to String
+
+        let cache_dir = cache_dir()?;
+        let entries = fs::read_dir(&cache_dir).map_err(|e| {
+            format!(
+                "Failed to read cache directory {}: {}",
+                cache_dir.display(),
+                e
+            )
+        })?;
+
+        let cached_targets: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .flat_map(|entry| {
+                let path = entry.path();
+                if path.is_dir() {
+                    fs::read_dir(path)
+                        .ok()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|e| e.ok())
+                        .filter_map(|e| {
+                            e.path()
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .map(str::to_owned)
+                        })
+                        .collect::<Vec<_>>()
+                } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(str::to_owned)
+                        .into_iter()
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+
+        if cached_targets.is_empty() {
+            if !cache_dir.exists() {
+                log::error!(
+                    "SPIR-V cache directory does not exist: {}",
+                    cache_dir.display()
+                );
+            }
+            log::error!(
+                "Cache directory exists but contains no valid SPIR-V target files (*.json): {}",
+                cache_dir.display()
+            );
+        }
+
+        let mut targets: Vec<String> = legacy_targets
+            .chain(cached_targets)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .filter(|t| t.contains("vulkan"))
+            .collect();
+
+        targets.sort();
+        Ok(targets.into_iter())
     }
 }
