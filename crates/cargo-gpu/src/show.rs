@@ -1,8 +1,11 @@
 //! Display various information about `cargo gpu`, eg its cache directory.
 
-use std::fs;
-
 use crate::cache_dir;
+use crate::spirv_source::{query_metadata, SpirvSource};
+use crate::target_specs::update_target_specs_files;
+use anyhow::bail;
+use std::fs;
+use std::path::Path;
 
 /// Show the computed source of the spirv-std dependency.
 #[derive(Clone, Debug, clap::Parser)]
@@ -25,7 +28,7 @@ pub enum Info {
     Capabilities,
 
     /// All available SPIR-V targets
-    Targets,
+    Targets(SpirvSourceDep),
 }
 
 /// `cargo gpu show`
@@ -51,8 +54,7 @@ impl Show {
                 println!("{}\n", cache_dir()?.display());
             }
             Info::SpirvSource(SpirvSourceDep { shader_crate }) => {
-                let rust_gpu_source =
-                    crate::spirv_source::SpirvSource::get_rust_gpu_deps_from_shader(shader_crate)?;
+                let rust_gpu_source = SpirvSource::get_rust_gpu_deps_from_shader(shader_crate)?;
                 println!("{rust_gpu_source}\n");
             }
             Info::Commitsh => {
@@ -68,8 +70,10 @@ impl Show {
                     println!("  {capability:?}");
                 }
             }
-            Info::Targets => {
-                for target in Self::available_spirv_targets_iter()? {
+            Info::Targets(SpirvSourceDep { shader_crate }) => {
+                let (source, targets) = Self::available_spirv_targets_iter(shader_crate)?;
+                println!("All available targets for rust-gpu version '{}':", source);
+                for target in targets {
                     println!("{target}");
                 }
             }
@@ -89,66 +93,29 @@ impl Show {
 
     /// List all available spirv targets, note: the targets from compile time of cargo-gpu and those
     /// in the cache-directory will be picked up.
-    fn available_spirv_targets_iter() -> anyhow::Result<impl Iterator<Item = String>> {
-        let legacy_targets = legacy_target_specs::TARGET_SPECS
-            .iter()
-            .map(|(spec, _src)| (*spec).to_owned());
-
-        let cache_dir = cache_dir()?;
-        if !cache_dir.exists() {
-            log::error!(
-                "SPIR-V cache directory does not exist: {}",
-                cache_dir.display()
-            );
+    fn available_spirv_targets_iter(
+        shader_crate: &Path,
+    ) -> anyhow::Result<(SpirvSource, impl Iterator<Item = String>)> {
+        let source = SpirvSource::new(shader_crate, None, None)?;
+        let install_dir = source.install_dir()?;
+        if !install_dir.is_dir() {
+            bail!("rust-gpu version {} is not installed", source);
         }
-        let entries = fs::read_dir(&cache_dir)?;
+        let dummy_metadata = query_metadata(&install_dir)?;
+        let target_specs_dir = update_target_specs_files(&source, &dummy_metadata, false)?;
 
-        #[expect(
-            clippy::shadow_unrelated,
-            reason = "coz we use 'entry' in repeated nestings"
-        )]
-        let cached_targets: Vec<String> = entries
-            .flatten()
-            .flat_map(|entry| {
-                let path = entry.path();
-                if path.is_dir() {
-                    fs::read_dir(path)
-                        .ok()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Result::ok)
-                        .filter_map(|entry| {
-                            entry
-                                .path()
-                                .file_stem()
-                                .and_then(std::ffi::OsStr::to_str)
-                                .map(str::to_owned)
-                        })
-                        .collect::<Vec<_>>()
-                } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
-                    path.file_stem()
-                        .and_then(std::ffi::OsStr::to_str)
-                        .map(str::to_owned)
-                        .into_iter()
-                        .collect()
-                } else {
-                    Vec::new()
+        let mut targets = fs::read_dir(target_specs_dir)?
+            .filter_map(|entry| {
+                let file = entry.ok()?;
+                if file.path().is_file() {
+                    if let Some(target) = file.file_name().to_string_lossy().strip_suffix(".json") {
+                        return Some(target.to_owned());
+                    }
                 }
+                None
             })
-            .collect();
-        if cached_targets.is_empty() {
-            log::error!(
-                "Cache directory exists but contains no valid SPIR-V target files (*.json): {}",
-                cache_dir.display()
-            );
-        }
-        let mut targets: Vec<String> = legacy_targets
-            .chain(cached_targets)
-            .filter(|target| target.contains("vulkan"))
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+            .collect::<Vec<_>>();
         targets.sort();
-        Ok(targets.into_iter())
+        Ok((source, targets.into_iter()))
     }
 }
