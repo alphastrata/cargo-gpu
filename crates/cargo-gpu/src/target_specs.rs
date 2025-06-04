@@ -1,7 +1,26 @@
-//! Legacy target specs are spec jsons for versions before `rustc_codegen_spirv-target-specs`
-//! came bundled with them. Instead, cargo gpu needs to bundle these legacy spec files. Luckily,
-//! they are the same for all versions, as bundling target specs with the codegen backend was
-//! introduced before the first target spec update.
+//! This module deals with target specs, which are json metadata files that need to be passed to
+//! rustc to add foreign targets such as `spirv_unknown_vulkan1.2`.
+//!
+//! There are 4 version ranges of `rustc_codegen_spirv` and they all need different handling of
+//! their target specs:
+//! * "ancient" versions such as 0.9.0 or earlier do not need target specs, just passing the target
+//!   string (`spirv-unknown-vulkan1.2`) directly is sufficient. We still prep target-specs for them
+//!   like the "legacy" variant below, spirv-builder
+//!   [will just ignore it](https://github.com/Rust-GPU/rust-gpu/blob/369122e1703c0c32d3d46f46fa11ccf12667af03/crates/spirv-builder/src/lib.rs#L987)
+//! * "legacy" versions require target specs to compile, which is a requirement introduced by some
+//!   rustc version. Back then it was decided that cargo gpu would ship them, as they'd probably
+//!   never change, right? So now we're stuck with having to ship these "legacy" target specs with
+//!   cargo gpu *forever*. These are the symbol `legacy_target_specs::TARGET_SPECS`, with
+//!   `legacy_target_specs` being a **fixed** version of `rustc_codegen_spirv-target-specs`,
+//!   which must **never** update.
+//! * As of [PR 256](https://github.com/Rust-GPU/rust-gpu/pull/256), `rustc_codegen_spirv` now has
+//!   a direct dependency on `rustc_codegen_spirv-target-specs`, allowing cargo gpu to pull the
+//!   required target specs directly from that dependency. At this point, the target specs are
+//!   still the same as the legacy target specs.
+//! * The [edition 2024 PR](https://github.com/Rust-GPU/rust-gpu/pull/249) must update the
+//!   target specs to comply with newly added validation within rustc. This is why the new system
+//!   was implemented, so we can support both old and new target specs without having to worry
+//!   which version of cargo gpu you are using. It'll "just work".
 
 use crate::cache_dir;
 use crate::spirv_source::{FindPackage as _, SpirvSource};
