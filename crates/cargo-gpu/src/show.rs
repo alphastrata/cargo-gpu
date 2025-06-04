@@ -96,6 +96,13 @@ impl Show {
             .map(|(spec, _src)| spec.to_string()); // Convert to String
 
         let cache_dir = cache_dir()?;
+        if !cache_dir.exists() {
+            log::error!(
+                "SPIR-V cache directory does not exist: {}",
+                cache_dir.display()
+            );
+        }
+
         let entries = fs::read_dir(&cache_dir).map_err(|e| {
             format!(
                 "Failed to read cache directory {}: {}",
@@ -134,12 +141,6 @@ impl Show {
             .collect();
 
         if cached_targets.is_empty() {
-            if !cache_dir.exists() {
-                log::error!(
-                    "SPIR-V cache directory does not exist: {}",
-                    cache_dir.display()
-                );
-            }
             log::error!(
                 "Cache directory exists but contains no valid SPIR-V target files (*.json): {}",
                 cache_dir.display()
