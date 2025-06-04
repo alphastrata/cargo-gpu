@@ -3,7 +3,7 @@
 use crate::spirv_source::{
     get_channel_from_rustc_codegen_spirv_build_script, query_metadata, FindPackage as _,
 };
-use crate::target_specs::update_spec_files;
+use crate::target_specs::update_target_specs_files;
 use crate::{cache_dir, spirv_source::SpirvSource};
 use anyhow::Context as _;
 use spirv_builder::SpirvBuilder;
@@ -260,9 +260,8 @@ package = "rustc_codegen_spirv"
         log::info!("selected toolchain channel `{toolchain_channel:?}`");
 
         log::debug!("update_spec_files");
-        let target_spec_dir =
-            update_spec_files(&source, &install_dir, &dummy_metadata, skip_rebuild)
-                .context("writing target spec files")?;
+        let target_spec_dir = update_target_specs_files(&source, &dummy_metadata, !skip_rebuild)
+            .context("writing target spec files")?;
 
         if !skip_rebuild {
             log::debug!("ensure_toolchain_and_components_exist");

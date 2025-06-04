@@ -34,22 +34,29 @@ fn copy_spec_files(src: &Path, dst: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Add the target spec files to the crate.
-pub fn update_spec_files(
+/// Computes the `target-specs` directory to use and updates the target spec files, if enabled.
+pub fn update_target_specs_files(
     source: &SpirvSource,
-    install_dir: &Path,
     dummy_metadata: &Metadata,
-    skip_rebuild: bool,
+    update_files: bool,
 ) -> anyhow::Result<PathBuf> {
-    let mut target_specs_dst = install_dir.join("target-specs");
-    if !skip_rebuild {
-        if let Ok(target_specs) = dummy_metadata.find_package("rustc_codegen_spirv-target-specs") {
-            log::info!(
-                    "target-specs: found crate `rustc_codegen_spirv-target-specs` with manifest at `{}`", 
-                    target_specs.manifest_path
-                );
+    log::info!(
+        "target-specs: Resolving target specs `{}`",
+        if update_files {
+            "and update them"
+        } else {
+            "without updating"
+        }
+    );
 
-            let target_specs_src = target_specs
+    let mut target_specs_dst = source.install_dir()?.join("target-specs");
+    if let Ok(target_specs) = dummy_metadata.find_package("rustc_codegen_spirv-target-specs") {
+        log::info!(
+            "target-specs: found crate `rustc_codegen_spirv-target-specs` with manifest at `{}`",
+            target_specs.manifest_path
+        );
+
+        let target_specs_src = target_specs
                 .manifest_path
                 .as_std_path()
                 .parent()
@@ -58,34 +65,47 @@ pub fn update_spec_files(
                     src.is_dir().then_some(src)
                 })
                 .context("Could not find `target-specs` directory within `rustc_codegen_spirv-target-specs` dependency")?;
-            if source.is_path() {
-                // skip copy
-                log::info!(
-                    "target-specs: source is local path, use target-specs from `{}`",
-                    target_specs_src.display()
-                );
-                target_specs_dst = target_specs_src;
-            } else {
-                // copy over the target-specs
-                log::info!(
-                    "target-specs: Copy target specs from `{}`",
-                    target_specs_src.display()
-                );
+        log::info!(
+            "target-specs: found `rustc_codegen_spirv-target-specs` with `target-specs` directory `{}`",
+            target_specs_dst.display()
+        );
+
+        if source.is_path() {
+            // skip copy
+            log::info!(
+                "target-specs resolution: source is local path, use target-specs directly from `{}`",
+                target_specs_dst.display()
+            );
+            target_specs_dst = target_specs_src;
+        } else {
+            // copy over the target-specs
+            log::info!(
+                "target-specs resolution: coping target-specs from `{}`{}",
+                target_specs_dst.display(),
+                if update_files { "" } else { " was skipped" }
+            );
+            if update_files {
                 copy_spec_files(&target_specs_src, &target_specs_dst)
                     .context("copying target-specs json files")?;
             }
-        } else {
-            // use legacy target specs bundled with cargo gpu
-            if source.is_path() {
-                // This is a stupid situation:
-                // * We can't be certain that there are `target-specs` in the local checkout (there may be some in `spirv-builder`)
-                // * We can't dump our legacy ones into the `install_dir`, as that would modify the local rust-gpu checkout
-                // -> do what the old cargo gpu did, one global dir for all target specs
-                // and hope parallel runs don't shred each other
-                target_specs_dst = cache_dir()?.join("legacy-target-specs-for-local-checkout");
-            }
+        }
+    } else {
+        // use legacy target specs bundled with cargo gpu
+        if source.is_path() {
+            // This is a stupid situation:
+            // * We can't be certain that there are `target-specs` in the local checkout (there may be some in `spirv-builder`)
+            // * We can't dump our legacy ones into the `install_dir`, as that would modify the local rust-gpu checkout
+            // -> do what the old cargo gpu did, one global dir for all target specs
+            // and hope parallel runs don't shred each other
+            target_specs_dst = cache_dir()?.join("legacy-target-specs-for-local-checkout");
+        }
+        log::info!(
+            "target-specs resolution: legacy target specs in directory `{}`",
+            target_specs_dst.display()
+        );
+        if update_files {
             log::info!(
-                "target-specs: Writing legacy target specs to `{}`",
+                "target-specs: Writing legacy target specs into `{}`",
                 target_specs_dst.display()
             );
             write_legacy_target_specs(&target_specs_dst)?;
